@@ -189,7 +189,7 @@ export function findEngine(version: string, variant: Variant): Engine | undefine
 
 // Version/variant matching (mirrors src-tauri/src/engines.rs):
 // projects store major.minor ("4.4"); engines may carry a patch ("4.4.1").
-function versionMatchScore(engineVersion: string, projectVersion: string): number | null {
+export function versionMatchScore(engineVersion: string, projectVersion: string): number | null {
   if (engineVersion === projectVersion) return 0;
   if (engineVersion.startsWith(`${projectVersion}.`)) return 1; // patch release
   if (engineVersion.startsWith(`${projectVersion}-`)) return 2; // prerelease
@@ -197,7 +197,7 @@ function versionMatchScore(engineVersion: string, projectVersion: string): numbe
 }
 
 // A .NET engine can open a standard project; the reverse is not true.
-function variantMatchScore(engineVariant: Variant, projectVariant: Variant): number | null {
+export function variantMatchScore(engineVariant: Variant, projectVariant: Variant): number | null {
   if (engineVariant === projectVariant) return 0;
   if (engineVariant === "dotnet" && projectVariant === "standard") return 1;
   return null;
@@ -385,6 +385,17 @@ export async function changeProjectEngine(
     } else {
       toast(`"${project.name}" now uses Godot ${version} (${variantLabel(variant)})`, "success");
     }
+  } catch (e) {
+    toast(String(e), "danger");
+  }
+  notify();
+}
+
+export async function toggleProjectPinned(project: Project): Promise<void> {
+  const pinned = !project.pinned;
+  try {
+    await invoke<Project>("set_project_pinned", { id: project.id, pinned });
+    project.pinned = pinned;
   } catch (e) {
     toast(String(e), "danger");
   }

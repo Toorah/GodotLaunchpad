@@ -10,16 +10,20 @@
     "tauri": "tauri",
     "build:app": "tauri build",
     "build:debug": "tauri build --debug",
-    "build:exe": "tauri build --no-bundle"
+    "build:exe": "tauri build --no-bundle",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2",
+    "@tauri-apps/plugin-updater": "^2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "typescript": "~5.6.2",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "vitest": "^4.1.9"
   }
 }

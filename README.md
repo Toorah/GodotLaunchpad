@@ -3,6 +3,8 @@
 A standalone, lightweight desktop launcher for [Godot Engine](https://godotengine.org/).
 Built with [Tauri 2](https://tauri.app/) (Rust + native webview), around 12 MB.
 
+📖 [Usage docs](https://toorah.github.io/GodotLaunchpad/)
+
 ## Features
 
 - Download any Godot version: Standard or .NET, stable or pre-release

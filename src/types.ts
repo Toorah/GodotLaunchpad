@@ -30,6 +30,7 @@ export interface Project {
   variant: Variant;
   renderer: Renderer;
   lastOpened: number | null; // epoch millis
+  pinned: boolean;
 }
 
 export interface Settings {

@@ -1,9 +1,12 @@
 // Settings view: directories, download source, behaviour. Persisted via the backend.
 
+import { getVersion } from "@tauri-apps/api/app";
+
 import { Settings } from "../types";
 import { esc, q } from "../dom";
 import { saveSettings, state } from "../state";
 import { pickFolder } from "../components/modals";
+import { checkForUpdates } from "../updater";
 
 let dirty = false;
 
@@ -76,10 +79,29 @@ export function renderSettings(root: HTMLElement): void {
       </div>
     </div>
 
+    <div class="settings-group">
+      <div class="section-title" style="margin-top:0;">About</div>
+      <div class="settings-row">
+        <div class="settings-label">
+          <div class="label-title">Version</div>
+          <div class="label-desc" id="about-version">Godot Launchpad</div>
+        </div>
+        <div class="settings-control">
+          <button class="btn btn-sm" id="btn-check-updates">Check for Updates</button>
+        </div>
+      </div>
+    </div>
+
     <div style="display:flex; align-items:center; gap:12px;">
       <button class="btn btn-primary" id="set-save">Save Settings</button>
       <span id="unsaved-label" class="badge badge-channel" style="display:none;">Unsaved changes</span>
     </div>`;
+
+  void getVersion().then((v) => {
+    const el = root.querySelector("#about-version");
+    if (el) el.textContent = `Godot Launchpad v${v}`;
+  });
+  q(root, "#btn-check-updates").addEventListener("click", () => void checkForUpdates());
 
   const currentValues = (): Settings => ({
     enginesDir: q<HTMLInputElement>(root, "#set-engines-dir").value.trim(),

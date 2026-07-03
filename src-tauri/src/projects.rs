@@ -176,6 +176,7 @@ pub fn create_project(
         variant,
         renderer,
         last_opened: None,
+        pinned: false,
     };
     let mut projects = load_manifest(&app)?;
     projects.retain(|p| p.id != project.id);
@@ -223,6 +224,7 @@ fn project_from_dir(dir: &Path) -> Result<Project, String> {
         },
         renderer: detected.renderer,
         last_opened: None,
+        pinned: false,
     })
 }
 
@@ -357,8 +359,86 @@ pub fn change_project_engine(
 }
 
 #[tauri::command]
+pub fn set_project_pinned(app: AppHandle, id: String, pinned: bool) -> Result<Project, String> {
+    let mut projects = load_manifest(&app)?;
+    let project = projects
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or("project not found")?;
+    project.pinned = pinned;
+    let updated = project.clone();
+    save_manifest(&app, &projects)?;
+    Ok(updated)
+}
+
+#[tauri::command]
 pub fn remove_project(app: AppHandle, id: String) -> Result<(), String> {
     let mut projects = load_manifest(&app)?;
     projects.retain(|p| p.id != id);
     save_manifest(&app, &projects)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_godot4_standard_forward_plus() {
+        let text = r#"
+config_version=5
+
+[application]
+
+config/name="My Game"
+config/features=PackedStringArray("4.3", "Forward Plus")
+config/icon="res://icon.svg"
+"#;
+        let d = parse_project_godot(text);
+        assert_eq!(d.name.as_deref(), Some("My Game"));
+        assert_eq!(d.version.as_deref(), Some("4.3"));
+        assert!(!d.dotnet);
+        assert_eq!(d.renderer, "forward-plus");
+    }
+
+    #[test]
+    fn parses_godot4_dotnet_mobile_renderer() {
+        let text = r#"
+config/name="CSharp Game"
+config/features=PackedStringArray("4.4", "C#", "Mobile")
+
+[rendering]
+
+renderer/rendering_method="mobile"
+"#;
+        let d = parse_project_godot(text);
+        assert_eq!(d.name.as_deref(), Some("CSharp Game"));
+        assert_eq!(d.version.as_deref(), Some("4.4"));
+        assert!(d.dotnet);
+        assert_eq!(d.renderer, "mobile");
+    }
+
+    #[test]
+    fn parses_compatibility_renderer_and_ignores_mobile_override_key() {
+        let text = r#"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+"#;
+        let d = parse_project_godot(text);
+        // the plain key wins; a differing .mobile override key must not be matched
+        assert_eq!(d.renderer, "compatibility");
+    }
+
+    #[test]
+    fn godot3_project_has_no_features_array() {
+        let text = "config_version=4\n\n[application]\n\nconfig/name=\"Old Project\"\n";
+        let d = parse_project_godot(text);
+        assert_eq!(d.name.as_deref(), Some("Old Project"));
+        assert_eq!(d.version, None);
+        assert!(!d.dotnet);
+        assert_eq!(d.renderer, "forward-plus"); // default
+    }
 }

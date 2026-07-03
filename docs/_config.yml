@@ -1,0 +1,10 @@
+title: Godot Launchpad
+description: >-
+  A lightweight, cross-platform desktop launcher for Godot Engine — manage
+  engine versions and projects in one place.
+theme: minima
+header_pages:
+  - installing.md
+  - managing-engines.md
+  - managing-projects.md
+  - troubleshooting.md

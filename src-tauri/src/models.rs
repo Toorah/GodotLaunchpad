@@ -34,6 +34,8 @@ pub struct Project {
     pub variant: String,
     pub renderer: String,
     pub last_opened: Option<i64>, // epoch millis
+    #[serde(default)] // existing projects.json entries predate this field
+    pub pinned: bool,
 }
 
 impl EngineInfo {

@@ -2,7 +2,7 @@
 
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
-import { Project, fmtRelative, variantLabel } from "../types";
+import { Project, compareVersionsDesc, fmtRelative, variantLabel } from "../types";
 import { esc, onDataClick, q } from "../dom";
 import {
   bestEngineForProject,
@@ -12,6 +12,7 @@ import {
   startDownload,
   state,
   toast,
+  toggleProjectPinned,
 } from "../state";
 import {
   pickFolder,
@@ -21,6 +22,29 @@ import {
 } from "../components/modals";
 
 let searchQuery = "";
+// project ids currently mid-launch — gives the Open button instant feedback
+// instead of sitting inert for the second or two open_project takes to spawn
+const openingIds = new Set<string>();
+
+type SortKey = "recent" | "name" | "engine";
+let sortKey: SortKey = "recent";
+
+const sortLabels: Record<SortKey, string> = {
+  recent: "Recently opened",
+  name: "Name",
+  engine: "Engine version",
+};
+
+const sortComparators: Record<SortKey, (a: Project, b: Project) => number> = {
+  recent: (a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0),
+  name: (a, b) => a.name.localeCompare(b.name),
+  engine: (a, b) =>
+    compareVersionsDesc(a.engineVersion, b.engineVersion) || a.variant.localeCompare(b.variant),
+};
+
+function sortProjects(list: Project[]): Project[] {
+  return [...list].sort(sortComparators[sortKey]);
+}
 
 function engineBadge(p: Project, installed: boolean): string {
   const version = esc(p.engineVersion);
@@ -42,7 +66,12 @@ function projectCard(p: Project): string {
 
   let mainAction: string;
   if (installedEngine) {
-    mainAction = `
+    mainAction = openingIds.has(p.id)
+      ? `
+      <button class="btn btn-primary btn-sm" disabled>
+        <span class="btn-spinner"></span> Opening…
+      </button>`
+      : `
       <button class="btn btn-primary btn-sm" data-open="${id}"
         title="Open with Godot ${esc(installedEngine.version)} (${variantLabel(installedEngine.variant)})">
         Open
@@ -79,6 +108,10 @@ function projectCard(p: Project): string {
       <span class="card-meta">${opened}</span>
       <div class="card-actions">
         ${mainAction}
+        <button class="btn btn-ghost btn-sm" data-pin="${id}" title="${p.pinned ? "Unpin" : "Pin to top"}"
+          style="${p.pinned ? "color: var(--warning);" : ""}">
+          ${p.pinned ? "★" : "☆"}
+        </button>
         <button class="btn btn-ghost btn-sm" data-folder="${id}" title="Show in file explorer">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
             <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
@@ -92,21 +125,34 @@ function projectCard(p: Project): string {
 
 export function renderProjects(root: HTMLElement): void {
   const query = searchQuery.toLowerCase();
-  const projects = state.projects.filter(
+  const filtered = state.projects.filter(
     (p) => !query || p.name.toLowerCase().includes(query) || p.path.toLowerCase().includes(query),
   );
+  const pinned = sortProjects(filtered.filter((p) => p.pinned));
+  const rest = sortProjects(filtered.filter((p) => !p.pinned));
+
+  const sortOptions = (Object.keys(sortLabels) as SortKey[])
+    .map((key) => `<option value="${key}" ${key === sortKey ? "selected" : ""}>${sortLabels[key]}</option>`)
+    .join("");
+
+  const list = (title: string, items: Project[]) =>
+    items.length
+      ? `${pinned.length ? `<div class="group-title">${title}</div>` : ""}
+         <div class="card-list">${items.map(projectCard).join("")}</div>`
+      : "";
 
   root.innerHTML = `
     <div class="view-header">
       <h1 class="view-title">Projects</h1>
       <span class="spacer"></span>
+      <select id="project-sort" title="Sort by">${sortOptions}</select>
       <input type="text" class="search-box" id="project-search" placeholder="Search projects…" value="${esc(searchQuery)}" />
       <button class="btn" id="btn-import">Import</button>
       <button class="btn btn-primary" id="btn-new">+ New Project</button>
     </div>
     ${
-      projects.length
-        ? `<div class="card-list">${projects.map(projectCard).join("")}</div>`
+      filtered.length
+        ? `${list("📌 Pinned", pinned)}${list("All Projects", rest)}`
         : `<div class="empty-state">
              <div class="empty-icon">▦</div>
              <p><strong>${searchQuery ? "No projects match your search" : "No projects yet"}</strong></p>
@@ -123,6 +169,11 @@ export function renderProjects(root: HTMLElement): void {
     s.setSelectionRange(s.value.length, s.value.length);
   });
 
+  q<HTMLSelectElement>(root, "#project-sort").addEventListener("change", (e) => {
+    sortKey = (e.target as HTMLSelectElement).value as SortKey;
+    renderProjects(root);
+  });
+
   q(root, "#btn-new").addEventListener("click", showNewProjectModal);
   q(root, "#btn-import").addEventListener("click", async () => {
     const path = await pickFolder("Choose a Godot project folder", state.settings.projectsDir);
@@ -137,7 +188,19 @@ export function renderProjects(root: HTMLElement): void {
 
   onDataClick(root, "open", (id) => {
     const p = project(id);
-    if (p) void openProject(p);
+    if (!p || openingIds.has(id)) return;
+    // instant feedback — don't wait on the invoke() round trip to show anything
+    openingIds.add(id);
+    renderProjects(root);
+    void openProject(p).finally(() => {
+      openingIds.delete(id);
+      renderProjects(root);
+    });
+  });
+
+  onDataClick(root, "pin", (id) => {
+    const p = project(id);
+    if (p) void toggleProjectPinned(p).then(() => renderProjects(root));
   });
 
   onDataClick(root, "install", (id) => {

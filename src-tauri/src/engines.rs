@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha512};
 use tauri::{AppHandle, Emitter};
 
 use crate::models::{channel_of, engine_id, EngineInfo};
@@ -494,6 +495,44 @@ fn validate_download_url(url: &str) -> Result<(), String> {
     }
 }
 
+/// Godot releases publish a `SHA512-SUMS.txt` asset alongside the binaries, in
+/// the same release folder as the asset itself. Given the asset's own
+/// download URL, derive (checksums file URL, asset file name).
+fn checksums_url_for(asset_url: &str) -> Option<(String, String)> {
+    let (base, filename) = asset_url.rsplit_once('/')?;
+    Some((format!("{base}/SHA512-SUMS.txt"), filename.to_string()))
+}
+
+/// Parse a `sha512sum`-style listing ("<hex digest>  <filename>" per line)
+/// and return the digest for `filename`, lowercased.
+fn parse_checksum(sums: &str, filename: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let mut parts = line.trim().splitn(2, char::is_whitespace);
+        let hash = parts.next()?.trim();
+        let name = parts.next()?.trim().trim_start_matches('*');
+        (name == filename).then(|| hash.to_lowercase())
+    })
+}
+
+/// Best-effort: look up the official checksum for this asset. Returns `None`
+/// on any failure (network, missing file, unparseable) — verification is a
+/// bonus, not a hard requirement, since we can't assume every past or future
+/// release publishes this file.
+async fn fetch_expected_checksum(client: &reqwest::Client, asset_url: &str) -> Option<String> {
+    let (sums_url, filename) = checksums_url_for(asset_url)?;
+    let resp = client
+        .get(&sums_url)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let text = resp.text().await.ok()?;
+    parse_checksum(&text, &filename)
+}
+
 fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), String> {
     let file = fs::File::open(zip_path).map_err(|e| format!("cannot open archive: {e}"))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("bad zip: {e}"))?;
@@ -540,7 +579,11 @@ pub async fn download_engine(
     let target = root.join(&id);
 
     // ---- download with progress events ----
-    let resp = http_client()
+    let client = http_client();
+    // best-effort: not every release is guaranteed to publish this file
+    let expected_sha512 = fetch_expected_checksum(&client, &url).await;
+
+    let resp = client
         .get(&url)
         .send()
         .await
@@ -550,12 +593,14 @@ pub async fn download_engine(
     }
     let total = resp.content_length().unwrap_or(0);
     let mut file = fs::File::create(&zip_path).map_err(|e| format!("cannot create file: {e}"))?;
+    let mut hasher = Sha512::new();
     let mut stream = resp.bytes_stream();
     let mut downloaded: u64 = 0;
     let mut last_pct: i64 = -1;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("download interrupted: {e}"))?;
         file.write_all(&chunk).map_err(|e| format!("write failed: {e}"))?;
+        hasher.update(&chunk);
         downloaded += chunk.len() as u64;
         if total > 0 {
             let pct = (downloaded * 100 / total) as i64;
@@ -569,6 +614,17 @@ pub async fn download_engine(
         }
     }
     drop(file);
+
+    if let Some(expected) = expected_sha512 {
+        let actual: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        if actual != expected {
+            fs::remove_file(&zip_path).ok();
+            return Err(
+                "downloaded file failed checksum verification — it may be corrupted, try downloading again"
+                    .into(),
+            );
+        }
+    }
 
     // ---- extract ----
     if target.exists() {
@@ -611,4 +667,102 @@ pub fn remove_engine(app: AppHandle, version: String, variant: String) -> Result
         fs::remove_dir_all(&dir).map_err(|e| format!("cannot remove engine: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_match_score_exact_patch_prerelease_none() {
+        assert_eq!(version_match_score("4.4", "4.4"), Some(0));
+        assert_eq!(version_match_score("4.4.1", "4.4"), Some(1));
+        assert_eq!(version_match_score("4.4-dev3", "4.4"), Some(2));
+        assert_eq!(version_match_score("4.5", "4.4"), None);
+        // must not match a totally different minor that happens to share a prefix
+        assert_eq!(version_match_score("4.40", "4.4"), None);
+    }
+
+    #[test]
+    fn variant_match_score_dotnet_stands_in_for_standard_not_vice_versa() {
+        assert_eq!(variant_match_score("standard", "standard"), Some(0));
+        assert_eq!(variant_match_score("dotnet", "dotnet"), Some(0));
+        assert_eq!(variant_match_score("dotnet", "standard"), Some(1));
+        assert_eq!(variant_match_score("standard", "dotnet"), None);
+    }
+
+    #[test]
+    fn version_newer_numeric_then_stable_over_prerelease() {
+        assert!(version_newer("4.4.1", "4.4"));
+        assert!(!version_newer("4.4", "4.4.1"));
+        assert!(version_newer("4.4", "4.4-dev3")); // stable beats prerelease of same version
+        assert!(!version_newer("4.4-dev3", "4.4"));
+        assert!(version_newer("4.4-rc2", "4.4-dev3")); // "rc2" > "dev3" lexically
+    }
+
+    #[test]
+    fn parse_version_output_standard_stable() {
+        let out = parse_version_output("4.3.stable.official.77dcf97d8\n");
+        assert_eq!(out, Some(("4.3".to_string(), "standard".to_string())));
+    }
+
+    #[test]
+    fn parse_version_output_dotnet_prerelease() {
+        let out = parse_version_output("4.4.dev3.mono.official.f7c567e2f\n");
+        assert_eq!(out, Some(("4.4-dev3".to_string(), "dotnet".to_string())));
+    }
+
+    #[test]
+    fn parse_version_output_garbage_is_none() {
+        assert_eq!(parse_version_output("Godot Engine v4.3\nusage: ...\n"), None);
+        assert_eq!(parse_version_output(""), None);
+    }
+
+    #[test]
+    fn validate_engine_ref_rejects_path_traversal_and_bad_variant() {
+        assert!(validate_engine_ref("4.3", "standard").is_ok());
+        assert!(validate_engine_ref("4.4-dev3", "dotnet").is_ok());
+        assert!(validate_engine_ref("../../etc", "standard").is_err());
+        assert!(validate_engine_ref("4.3/..", "standard").is_err());
+        assert!(validate_engine_ref("4.3", "bogus").is_err());
+        assert!(validate_engine_ref("", "standard").is_err());
+    }
+
+    #[test]
+    fn checksums_url_for_derives_sums_file_next_to_the_asset() {
+        let (sums_url, filename) = checksums_url_for(
+            "https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_win64.exe.zip",
+        )
+        .unwrap();
+        assert_eq!(
+            sums_url,
+            "https://github.com/godotengine/godot/releases/download/4.3-stable/SHA512-SUMS.txt"
+        );
+        assert_eq!(filename, "Godot_v4.3-stable_win64.exe.zip");
+    }
+
+    #[test]
+    fn parse_checksum_finds_the_matching_line_and_lowercases_it() {
+        let sums = "AA11  other-file.zip\nbb22cc  Godot_v4.3-stable_win64.exe.zip\n";
+        assert_eq!(
+            parse_checksum(sums, "Godot_v4.3-stable_win64.exe.zip").as_deref(),
+            Some("bb22cc")
+        );
+        assert_eq!(parse_checksum(sums, "other-file.zip").as_deref(), Some("aa11"));
+        assert_eq!(parse_checksum(sums, "missing.zip"), None);
+    }
+
+    #[test]
+    fn validate_download_url_only_allows_github_hosts() {
+        assert!(validate_download_url(
+            "https://github.com/godotengine/godot/releases/download/4.3-stable/x.zip"
+        )
+        .is_ok());
+        assert!(validate_download_url(
+            "https://objects.githubusercontent.com/some/asset.zip"
+        )
+        .is_ok());
+        assert!(validate_download_url("https://evil.example.com/x.zip").is_err());
+        assert!(validate_download_url("http://github.com/x.zip").is_err()); // not https
+    }
 }

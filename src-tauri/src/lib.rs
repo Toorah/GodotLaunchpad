@@ -9,6 +9,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             settings::get_settings,
             settings::set_settings,
@@ -24,6 +26,7 @@ pub fn run() {
             projects::scan_projects,
             projects::open_project,
             projects::change_project_engine,
+            projects::set_project_pinned,
             projects::remove_project,
         ])
         .run(tauri::generate_context!())
