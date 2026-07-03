@@ -1,5 +1,7 @@
 // App entry: sidebar navigation + view rendering.
 
+import { getVersion } from "@tauri-apps/api/app";
+
 import { init, setView, state, subscribe, View } from "./state";
 import { renderProjects } from "./views/projects";
 import { renderEngines } from "./views/engines";
@@ -61,6 +63,11 @@ window.addEventListener("DOMContentLoaded", () => {
       }
       setView(target);
     });
+  });
+
+  void getVersion().then((v) => {
+    const el = document.querySelector(".app-version");
+    if (el) el.textContent = `v${v}`;
   });
 
   subscribe(render);
