@@ -1,0 +1,20 @@
+# Normalize line endings: LF in the repo, native on checkout where it matters
+* text=auto
+
+# Source and config files are text
+*.rs text
+*.ts text
+*.js text
+*.css text
+*.html text
+*.json text
+*.toml text
+*.yml text
+*.yaml text
+*.md text
+*.svg text
+
+# Binary assets
+*.png binary
+*.ico binary
+*.icns binary

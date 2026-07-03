@@ -1,0 +1,24 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- My Godot Launcher app icon: rocket lifting off, Godot-blue palette -->
+  <rect width="1024" height="1024" rx="224" fill="#478cbf"/>
+  <!-- subtle top highlight -->
+  <rect width="1024" height="512" rx="224" fill="#ffffff" fill-opacity="0.06"/>
+
+  <g transform="rotate(45 512 512)">
+    <!-- exhaust flame -->
+    <path d="M512 920 C 452 820, 436 750, 436 688 L588 688 C588 750, 572 820, 512 920 Z" fill="#f4b942"/>
+    <path d="M512 848 C 480 788, 471 744, 471 706 L553 706 C553 744, 544 788, 512 848 Z" fill="#ffe294"/>
+
+    <!-- side fins -->
+    <path d="M645 470 L802 700 L645 645 Z" fill="#d7e6f2"/>
+    <path d="M379 470 L222 700 L379 645 Z" fill="#d7e6f2"/>
+
+    <!-- body -->
+    <path d="M512 130 C 618 240, 648 395, 648 560 L648 612 Q648 645 615 645 L409 645 Q376 645 376 612 L376 560 C376 395 406 240 512 130 Z" fill="#ffffff"/>
+
+    <!-- window -->
+    <circle cx="512" cy="425" r="82" fill="#2c5c80"/>
+    <circle cx="512" cy="425" r="52" fill="#1d3d57"/>
+    <circle cx="534" cy="403" r="16" fill="#9fc6e8"/>
+  </g>
+</svg>
