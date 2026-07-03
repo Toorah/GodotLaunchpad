@@ -27,9 +27,20 @@ Prerequisites:
 ```sh
 npm install
 npm run tauri dev     # run the app with hot reload
-npm run tauri build   # produce a release bundle/installer
 npx tsc --noEmit      # typecheck the frontend
 ```
+
+### Local builds (no release needed)
+
+```sh
+npm run build:exe     # optimized executable only, no installers (fastest)
+npm run build:app     # full release build: executable + platform installers
+npm run build:debug   # debug build with devtools enabled
+```
+
+Outputs land in `src-tauri/target/release/` (the bare executable) and
+`src-tauri/target/release/bundle/` (installers). Debug builds use
+`src-tauri/target/debug/` instead.
 
 ### Project layout
 
