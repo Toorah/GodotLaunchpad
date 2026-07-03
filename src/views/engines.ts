@@ -1,6 +1,7 @@
 // Engines view: installed engines + downloadable versions from GitHub.
 
 import { Engine, Variant, compareVersionsDesc, fmtSize, variantLabel } from "../types";
+import { esc, onDataClick, q } from "../dom";
 import { refreshRemote, removeEngine, setIncludePrereleases, startDownload, state } from "../state";
 import { addEngineFlow, showConfirmModal } from "../components/modals";
 
@@ -21,26 +22,26 @@ function engineCard(e: Engine): string {
         <span class="progress-label">${Math.floor(e.progress)}%</span>
       </div>`;
   } else if (e.status === "installed" && e.source === "external") {
-    actions = `<button class="btn btn-sm" data-remove="${e.id}" title="Removes the entry only — files on disk are not touched">Remove</button>`;
+    actions = `<button class="btn btn-sm" data-remove="${esc(e.id)}" title="Removes the entry only — files on disk are not touched">Remove</button>`;
   } else if (e.status === "installed") {
-    actions = `<button class="btn btn-danger btn-sm" data-remove="${e.id}" title="Deletes the engine files from disk">Delete</button>`;
+    actions = `<button class="btn btn-danger btn-sm" data-remove="${esc(e.id)}" title="Deletes the engine files from disk">Delete</button>`;
   } else {
-    actions = `<button class="btn btn-primary btn-sm" data-download="${e.id}">Download</button>`;
+    actions = `<button class="btn btn-primary btn-sm" data-download="${esc(e.id)}">Download</button>`;
   }
 
   const meta: string[] = [variantLabel(e.variant)];
   if (e.sizeMb) meta.push(fmtSize(e.sizeMb));
-  if (e.releaseDate) meta.push(`released ${e.releaseDate}`);
+  if (e.releaseDate) meta.push(`released ${esc(e.releaseDate)}`);
   const sub =
     e.status === "installed" && e.path
-      ? `${e.path}${e.sizeMb ? ` · ${fmtSize(e.sizeMb)}${e.source === "external" ? " (executable only)" : ""}` : ""}`
+      ? `${esc(e.path)}${e.sizeMb ? ` · ${fmtSize(e.sizeMb)}${e.source === "external" ? " (executable only)" : ""}` : ""}`
       : meta.join(" · ");
 
   return `
     <div class="card">
       <div class="card-icon">⚙</div>
       <div class="card-body">
-        <div class="card-title">Godot ${e.version} ${badges}</div>
+        <div class="card-title">Godot ${esc(e.version)} ${badges}</div>
         <div class="card-sub">${sub}</div>
       </div>
       <div class="card-actions">${actions}</div>
@@ -71,7 +72,9 @@ function versionGroups(engines: Engine[], showGroupSize: boolean): string {
   const groups = new Map<string, Engine[]>();
   for (const e of engines) {
     const key = minorOf(e.version);
-    groups.set(key, [...(groups.get(key) ?? []), e]);
+    const list = groups.get(key);
+    if (list) list.push(e);
+    else groups.set(key, [e]);
   }
   const orderedKeys = [...groups.keys()].sort(compareVersionsDesc);
   return orderedKeys
@@ -88,7 +91,7 @@ function versionGroups(engines: Engine[], showGroupSize: boolean): string {
         : 0;
       const size = groupMb > 0 ? ` · ${fmtSize(groupMb)}` : "";
       return `
-        <div class="group-title">Godot ${key}${size}</div>
+        <div class="group-title">Godot ${esc(key)}${size}</div>
         <div class="card-list">${list.map(engineCard).join("")}</div>`;
     })
     .join("");
@@ -160,41 +163,35 @@ export function renderEngines(root: HTMLElement): void {
     <div class="section-title">Available to download</div>
     ${availableSection}`;
 
-  root.querySelectorAll<HTMLButtonElement>("[data-variant]").forEach((tab) =>
-    tab.addEventListener("click", () => {
-      variantFilter = tab.dataset.variant as Variant | "all";
-      renderEngines(root);
-    }),
-  );
+  onDataClick(root, "variant", (value) => {
+    variantFilter = value as Variant | "all";
+    renderEngines(root);
+  });
 
-  (root.querySelector("#chk-prerelease") as HTMLInputElement).addEventListener("change", (e) => {
+  q<HTMLInputElement>(root, "#chk-prerelease").addEventListener("change", (e) => {
     void setIncludePrereleases((e.target as HTMLInputElement).checked);
   });
 
-  root.querySelector("#btn-refresh")!.addEventListener("click", () => void refreshRemote());
-  root.querySelector("#btn-add-engine")!.addEventListener("click", () => void addEngineFlow());
+  q(root, "#btn-refresh").addEventListener("click", () => void refreshRemote());
+  q(root, "#btn-add-engine").addEventListener("click", () => void addEngineFlow());
   root.querySelector("[data-retry]")?.addEventListener("click", () => void refreshRemote());
 
-  root.querySelectorAll<HTMLButtonElement>("[data-download]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const engine = state.engines.find((x) => x.id === btn.dataset.download);
-      if (engine) void startDownload(engine);
-    }),
-  );
+  onDataClick(root, "download", (id) => {
+    const engine = state.engines.find((x) => x.id === id);
+    if (engine) void startDownload(engine);
+  });
 
-  root.querySelectorAll<HTMLButtonElement>("[data-remove]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const engine = state.engines.find((x) => x.id === btn.dataset.remove);
-      if (!engine) return;
-      const external = engine.source === "external";
-      showConfirmModal(
-        external ? "Remove Engine" : "Delete Engine",
-        external
-          ? `Remove Godot ${engine.version} (${variantLabel(engine.variant)}) from the launcher? The files on disk are not touched.`
-          : `Delete Godot ${engine.version} (${variantLabel(engine.variant)})? This deletes the engine files from disk.`,
-        external ? "Remove" : "Delete",
-        () => void removeEngine(engine),
-      );
-    }),
-  );
+  onDataClick(root, "remove", (id) => {
+    const engine = state.engines.find((x) => x.id === id);
+    if (!engine) return;
+    const external = engine.source === "external";
+    showConfirmModal(
+      external ? "Remove Engine" : "Delete Engine",
+      external
+        ? `Remove Godot ${engine.version} (${variantLabel(engine.variant)}) from the launcher? The files on disk are not touched.`
+        : `Delete Godot ${engine.version} (${variantLabel(engine.variant)})? This deletes the engine files from disk.`,
+      external ? "Remove" : "Delete",
+      () => void removeEngine(engine),
+    );
+  });
 }

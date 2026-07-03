@@ -1,6 +1,7 @@
 // Settings view: directories, download source, behaviour. Persisted via the backend.
 
 import { Settings } from "../types";
+import { esc, q } from "../dom";
 import { saveSettings, state } from "../state";
 import { pickFolder } from "../components/modals";
 
@@ -31,7 +32,7 @@ export function renderSettings(root: HTMLElement): void {
           <div class="label-desc">Downloaded engines are unpacked here.</div>
         </div>
         <div class="settings-control">
-          <input type="text" id="set-engines-dir" value="${s.enginesDir}" />
+          <input type="text" id="set-engines-dir" value="${esc(s.enginesDir)}" />
           <button class="btn btn-sm" data-browse="engines">Browse…</button>
         </div>
       </div>
@@ -41,7 +42,7 @@ export function renderSettings(root: HTMLElement): void {
           <div class="label-desc">Default location for new projects.</div>
         </div>
         <div class="settings-control">
-          <input type="text" id="set-projects-dir" value="${s.projectsDir}" />
+          <input type="text" id="set-projects-dir" value="${esc(s.projectsDir)}" />
           <button class="btn btn-sm" data-browse="projects">Browse…</button>
         </div>
       </div>
@@ -81,10 +82,10 @@ export function renderSettings(root: HTMLElement): void {
     </div>`;
 
   const currentValues = (): Settings => ({
-    enginesDir: (root.querySelector("#set-engines-dir") as HTMLInputElement).value.trim(),
-    projectsDir: (root.querySelector("#set-projects-dir") as HTMLInputElement).value.trim(),
-    downloadSource: (root.querySelector("#set-source") as HTMLSelectElement).value,
-    closeOnLaunch: (root.querySelector("#set-close-on-launch") as HTMLInputElement).checked,
+    enginesDir: q<HTMLInputElement>(root, "#set-engines-dir").value.trim(),
+    projectsDir: q<HTMLInputElement>(root, "#set-projects-dir").value.trim(),
+    downloadSource: q<HTMLSelectElement>(root, "#set-source").value,
+    closeOnLaunch: q<HTMLInputElement>(root, "#set-close-on-launch").checked,
   });
 
   const updateDirty = () => {
@@ -95,9 +96,7 @@ export function renderSettings(root: HTMLElement): void {
       v.projectsDir !== saved.projectsDir ||
       v.downloadSource !== saved.downloadSource ||
       v.closeOnLaunch !== saved.closeOnLaunch;
-    (root.querySelector("#unsaved-label") as HTMLElement).style.display = dirty
-      ? "inline-flex"
-      : "none";
+    q(root, "#unsaved-label").style.display = dirty ? "inline-flex" : "none";
   };
 
   root
@@ -109,11 +108,10 @@ export function renderSettings(root: HTMLElement): void {
 
   root.querySelectorAll<HTMLButtonElement>("[data-browse]").forEach((btn) =>
     btn.addEventListener("click", async () => {
-      const input = root.querySelector(
-        btn.dataset.browse === "engines" ? "#set-engines-dir" : "#set-projects-dir",
-      ) as HTMLInputElement;
+      const engines = btn.dataset.browse === "engines";
+      const input = q<HTMLInputElement>(root, engines ? "#set-engines-dir" : "#set-projects-dir");
       const picked = await pickFolder(
-        btn.dataset.browse === "engines" ? "Choose engine install directory" : "Choose projects directory",
+        engines ? "Choose engine install directory" : "Choose projects directory",
         input.value,
       );
       if (picked) input.value = picked;
@@ -121,7 +119,7 @@ export function renderSettings(root: HTMLElement): void {
     }),
   );
 
-  root.querySelector("#set-save")!.addEventListener("click", async () => {
+  q(root, "#set-save").addEventListener("click", async () => {
     await saveSettings(currentValues());
     updateDirty();
   });

@@ -4,15 +4,31 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::models::{channel_of, engine_id, EngineInfo};
 use crate::settings::load_settings;
+use crate::storage::{load_json, save_json};
 
 const USER_AGENT: &str = "GodotLaunchpad/0.1";
+const EXTERNAL_MANIFEST: &str = "external_engines.json";
+
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+        .unwrap_or_default()
+}
+
+/// Bytes → MB rounded to one decimal.
+fn mb(bytes: u64) -> f64 {
+    (bytes as f64 / (1024.0 * 1024.0) * 10.0).round() / 10.0
+}
 
 // ---------------- installed engines ----------------
 
@@ -51,10 +67,33 @@ pub fn find_engine_binary(dir: &Path) -> Option<PathBuf> {
     fallback
 }
 
+/// Scan `<enginesDir>` for `<version>-<variant>` install folders.
+fn managed_installs(engines_dir: &str) -> Vec<(String, String, PathBuf)> {
+    let mut found = Vec::new();
+    if engines_dir.is_empty() {
+        return found;
+    }
+    let Ok(entries) = fs::read_dir(engines_dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let folder = entry.file_name().to_string_lossy().into_owned();
+        if let Some((version, variant)) = folder
+            .rsplit_once('-')
+            .filter(|(_, var)| matches!(*var, "standard" | "dotnet"))
+        {
+            found.push((version.to_string(), variant.to_string(), path));
+        }
+    }
+    found
+}
+
 fn file_size_mb(path: &str) -> f64 {
-    fs::metadata(path)
-        .map(|m| (m.len() as f64 / (1024.0 * 1024.0) * 10.0).round() / 10.0)
-        .unwrap_or(0.0)
+    fs::metadata(path).map(|m| mb(m.len())).unwrap_or(0.0)
 }
 
 fn dir_size_mb(dir: &Path) -> f64 {
@@ -75,7 +114,7 @@ fn dir_size_mb(dir: &Path) -> f64 {
             })
             .unwrap_or(0)
     }
-    (walk(dir) as f64 / (1024.0 * 1024.0) * 10.0).round() / 10.0
+    mb(walk(dir))
 }
 
 #[tauri::command]
@@ -84,37 +123,18 @@ pub fn list_installed_engines(app: AppHandle) -> Result<Vec<EngineInfo>, String>
     let mut engines = Vec::new();
 
     // managed installs: <enginesDir>/<version>-<variant>/
-    if !settings.engines_dir.is_empty() {
-        let root = PathBuf::from(&settings.engines_dir);
-        if let Ok(entries) = fs::read_dir(&root) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_dir() {
-                    continue;
-                }
-                let folder = entry.file_name().to_string_lossy().into_owned();
-                let Some((version, variant)) = folder.rsplit_once('-').and_then(|(v, var)| {
-                    matches!(var, "standard" | "dotnet").then(|| (v.to_string(), var.to_string()))
-                }) else {
-                    continue;
-                };
-                if find_engine_binary(&path).is_none() {
-                    continue; // incomplete install
-                }
-                engines.push(EngineInfo {
-                    id: engine_id(&version, &variant),
-                    channel: channel_of(&version).into(),
-                    status: "installed".into(),
-                    source: "managed".into(),
-                    size_mb: dir_size_mb(&path),
-                    release_date: String::new(),
-                    path: Some(path.to_string_lossy().into_owned()),
-                    download_url: None,
-                    version,
-                    variant,
-                });
-            }
+    for (version, variant, dir) in managed_installs(&settings.engines_dir) {
+        if find_engine_binary(&dir).is_none() {
+            continue; // incomplete install
         }
+        engines.push(EngineInfo::installed(
+            engine_id(&version, &variant),
+            version,
+            variant,
+            "managed",
+            dir_size_mb(&dir),
+            dir.to_string_lossy().into_owned(),
+        ));
     }
 
     // manually-added engines, wherever they live
@@ -122,19 +142,15 @@ pub fn list_installed_engines(app: AppHandle) -> Result<Vec<EngineInfo>, String>
         if !PathBuf::from(&ext.path).exists() {
             continue; // binary vanished — hide until it's back
         }
-        engines.push(EngineInfo {
-            id: ext.id.clone(),
-            channel: channel_of(&ext.version).into(),
-            status: "installed".into(),
-            source: "external".into(),
+        engines.push(EngineInfo::installed(
+            ext.id,
+            ext.version,
+            ext.variant,
+            "external",
             // just the executable — the launcher doesn't own its folder
-            size_mb: file_size_mb(&ext.path),
-            release_date: String::new(),
-            path: Some(ext.path.clone()),
-            download_url: None,
-            version: ext.version.clone(),
-            variant: ext.variant.clone(),
-        });
+            file_size_mb(&ext.path),
+            ext.path,
+        ));
     }
     Ok(engines)
 }
@@ -150,31 +166,12 @@ pub struct ExternalEngine {
     pub variant: String,
 }
 
-fn external_manifest_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("cannot resolve app data dir: {e}"))?;
-    Ok(dir.join("external_engines.json"))
-}
-
 pub fn load_external_engines(app: &AppHandle) -> Result<Vec<ExternalEngine>, String> {
-    let path = external_manifest_path(app)?;
-    match fs::read_to_string(&path) {
-        Ok(text) => {
-            serde_json::from_str(&text).map_err(|e| format!("external_engines.json is corrupt: {e}"))
-        }
-        Err(_) => Ok(Vec::new()),
-    }
+    load_json(app, EXTERNAL_MANIFEST, Vec::new)
 }
 
 fn save_external_engines(app: &AppHandle, engines: &[ExternalEngine]) -> Result<(), String> {
-    let path = external_manifest_path(app)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let text = serde_json::to_string_pretty(engines).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| format!("cannot write external_engines.json: {e}"))
+    save_json(app, EXTERNAL_MANIFEST, engines)
 }
 
 /// Parse `godot --version` output, e.g. "4.3.stable.official.77dcf97d8",
@@ -242,27 +239,22 @@ pub async fn add_external_engine(
     path.hash(&mut hasher);
     let id = format!("ext-{:x}", hasher.finish());
 
-    let entry = ExternalEngine {
+    engines.push(ExternalEngine {
         id: id.clone(),
         path: path.clone(),
         version: version.clone(),
         variant: variant.clone(),
-    };
-    engines.push(entry);
+    });
     save_external_engines(&app, &engines)?;
 
-    Ok(EngineInfo {
+    Ok(EngineInfo::installed(
         id,
-        channel: channel_of(&version).into(),
-        status: "installed".into(),
-        source: "external".into(),
-        size_mb: file_size_mb(&path),
-        release_date: String::new(),
-        path: Some(path),
-        download_url: None,
         version,
         variant,
-    })
+        "external",
+        file_size_mb(&path),
+        path,
+    ))
 }
 
 #[tauri::command]
@@ -347,24 +339,9 @@ pub fn resolve_engine_binary(
         }
     };
 
-    if !engines_dir.is_empty() {
-        if let Ok(entries) = fs::read_dir(engines_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_dir() {
-                    continue;
-                }
-                let folder = entry.file_name().to_string_lossy().into_owned();
-                let Some((v, var)) = folder
-                    .rsplit_once('-')
-                    .filter(|(_, var)| matches!(*var, "standard" | "dotnet"))
-                else {
-                    continue;
-                };
-                if let Some(binary) = find_engine_binary(&path) {
-                    consider(v, var, binary);
-                }
-            }
+    for (v, var, dir) in managed_installs(engines_dir) {
+        if let Some(binary) = find_engine_binary(&dir) {
+            consider(&v, &var, binary);
         }
     }
     for ext in load_external_engines(app).unwrap_or_default() {
@@ -437,7 +414,7 @@ fn releases_to_engines(releases: Vec<GhRelease>) -> Vec<EngineInfo> {
                     channel: channel_of(&version).into(),
                     status: "available".into(),
                     source: "managed".into(),
-                    size_mb: (asset.size as f64 / (1024.0 * 1024.0) * 10.0).round() / 10.0,
+                    size_mb: mb(asset.size),
                     release_date: date.clone(),
                     path: None,
                     download_url: Some(asset.browser_download_url.clone()),
@@ -451,7 +428,7 @@ fn releases_to_engines(releases: Vec<GhRelease>) -> Vec<EngineInfo> {
 async fn fetch_releases(client: &reqwest::Client, url: &str) -> Result<Vec<GhRelease>, String> {
     let resp = client
         .get(url)
-        .header("User-Agent", USER_AGENT)
+        .timeout(Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("network error: {e}"))?;
@@ -463,7 +440,7 @@ async fn fetch_releases(client: &reqwest::Client, url: &str) -> Result<Vec<GhRel
 
 #[tauri::command]
 pub async fn fetch_available_engines(include_prereleases: bool) -> Result<Vec<EngineInfo>, String> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     // Stable releases from the main repo (sparse — 100 covers many years).
     let mut releases = fetch_releases(
         &client,
@@ -489,6 +466,33 @@ pub async fn fetch_available_engines(include_prereleases: bool) -> Result<Vec<En
 }
 
 // ---------------- download / remove ----------------
+
+/// version/variant become an on-disk folder name — reject anything that could
+/// escape the engines dir (path separators, "..", empty parts).
+fn validate_engine_ref(version: &str, variant: &str) -> Result<(), String> {
+    let version_ok = !version.is_empty()
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && !version.contains("..");
+    if !version_ok || !matches!(variant, "standard" | "dotnet") {
+        return Err("invalid engine version or variant".into());
+    }
+    Ok(())
+}
+
+/// Engine archives only ever come from GitHub — refuse anything else.
+fn validate_download_url(url: &str) -> Result<(), String> {
+    let host = url
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("");
+    if matches!(host, "github.com" | "objects.githubusercontent.com") {
+        Ok(())
+    } else {
+        Err("refusing to download from outside GitHub".into())
+    }
+}
 
 fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), String> {
     let file = fs::File::open(zip_path).map_err(|e| format!("cannot open archive: {e}"))?;
@@ -522,6 +526,8 @@ pub async fn download_engine(
     variant: String,
     url: String,
 ) -> Result<EngineInfo, String> {
+    validate_engine_ref(&version, &variant)?;
+    validate_download_url(&url)?;
     let settings = load_settings(&app)?;
     if settings.engines_dir.is_empty() {
         return Err("Engine install directory is not set — choose one in Settings first".into());
@@ -534,10 +540,8 @@ pub async fn download_engine(
     let target = root.join(&id);
 
     // ---- download with progress events ----
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = http_client()
         .get(&url)
-        .header("User-Agent", USER_AGENT)
         .send()
         .await
         .map_err(|e| format!("download failed: {e}"))?;
@@ -585,23 +589,23 @@ pub async fn download_engine(
         return Err("archive did not contain a Godot executable".into());
     }
 
-    Ok(EngineInfo {
+    Ok(EngineInfo::installed(
         id,
-        channel: channel_of(&version).into(),
-        status: "installed".into(),
-        source: "managed".into(),
-        size_mb: dir_size_mb(&target),
-        release_date: String::new(),
-        path: Some(target.to_string_lossy().into_owned()),
-        download_url: None,
         version,
         variant,
-    })
+        "managed",
+        dir_size_mb(&target),
+        target.to_string_lossy().into_owned(),
+    ))
 }
 
 #[tauri::command]
 pub fn remove_engine(app: AppHandle, version: String, variant: String) -> Result<(), String> {
+    validate_engine_ref(&version, &variant)?;
     let settings = load_settings(&app)?;
+    if settings.engines_dir.is_empty() {
+        return Ok(()); // nothing managed can exist without an engines dir
+    }
     let dir = PathBuf::from(&settings.engines_dir).join(engine_id(&version, &variant));
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| format!("cannot remove engine: {e}"))?;

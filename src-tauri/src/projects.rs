@@ -3,35 +3,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::engines::resolve_engine_binary;
 use crate::models::Project;
 use crate::settings::load_settings;
-
-fn manifest_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("cannot resolve app data dir: {e}"))?;
-    Ok(dir.join("projects.json"))
-}
+use crate::storage::{load_json, save_json};
 
 fn load_manifest(app: &AppHandle) -> Result<Vec<Project>, String> {
-    let path = manifest_path(app)?;
-    match fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("projects.json is corrupt: {e}")),
-        Err(_) => Ok(Vec::new()),
-    }
+    load_json(app, "projects.json", Vec::new)
 }
 
 fn save_manifest(app: &AppHandle, projects: &[Project]) -> Result<(), String> {
-    let path = manifest_path(app)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let text = serde_json::to_string_pretty(projects).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| format!("cannot write projects.json: {e}"))
+    save_json(app, "projects.json", projects)
 }
 
 fn now_millis() -> i64 {

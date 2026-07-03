@@ -2,7 +2,8 @@
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
-import { Project, Renderer, Settings, Variant, variantLabel } from "../types";
+import { Engine, Project, Renderer, Settings, Variant, variantLabel } from "../types";
+import { esc, q } from "../dom";
 import {
   addExternalEngine,
   changeProjectEngine,
@@ -19,7 +20,7 @@ function openModal(title: string, bodyHtml: string, footerHtml: string): HTMLEle
     <div class="modal-overlay">
       <div class="modal">
         <div class="modal-header">
-          <h2 class="modal-title">${title}</h2>
+          <h2 class="modal-title">${esc(title)}</h2>
           <button class="modal-close" data-close>✕</button>
         </div>
         <div class="modal-body">${bodyHtml}</div>
@@ -27,11 +28,14 @@ function openModal(title: string, bodyHtml: string, footerHtml: string): HTMLEle
       </div>
     </div>`;
 
-  const overlay = root.querySelector(".modal-overlay") as HTMLElement;
+  const overlay = q(root, ".modal-overlay");
   overlay.addEventListener("mousedown", (e) => {
     if (e.target === overlay) closeModal();
   });
-  overlay.querySelector("[data-close]")!.addEventListener("click", closeModal);
+  // the ✕ button plus any footer button marked data-close-btn
+  overlay
+    .querySelectorAll("[data-close], [data-close-btn]")
+    .forEach((btn) => btn.addEventListener("click", closeModal));
   return overlay;
 }
 
@@ -49,6 +53,14 @@ export async function pickFolder(title: string, defaultPath?: string): Promise<s
   return typeof result === "string" ? result : null;
 }
 
+/** `<option>` for picking an engine, encoded as "version|variant". */
+function engineOption(e: Engine, selectedValue?: string): string {
+  const value = `${e.version}|${e.variant}`;
+  return `<option value="${esc(value)}" ${value === selectedValue ? "selected" : ""}>
+      Godot ${esc(e.version)} — ${variantLabel(e.variant)}${e.channel !== "stable" ? ` (${e.channel})` : ""}
+    </option>`;
+}
+
 // ---------- New Project ----------
 
 export function showNewProjectModal(): void {
@@ -64,12 +76,6 @@ export function showNewProjectModal(): void {
     );
     return;
   }
-  const options = engines
-    .map(
-      (e) =>
-        `<option value="${e.version}|${e.variant}">Godot ${e.version} — ${variantLabel(e.variant)}</option>`,
-    )
-    .join("");
 
   const overlay = openModal(
     "New Project",
@@ -81,7 +87,7 @@ export function showNewProjectModal(): void {
     <div class="form-field">
       <label>Create in</label>
       <div style="display:flex; gap:8px;">
-        <input type="text" id="np-folder" value="${state.settings.projectsDir}" style="flex:1;" />
+        <input type="text" id="np-folder" value="${esc(state.settings.projectsDir)}" style="flex:1;" />
         <button class="btn btn-sm" id="np-browse">Browse…</button>
       </div>
       <div class="field-hint">A subfolder with the project name will be created here.</div>
@@ -89,7 +95,7 @@ export function showNewProjectModal(): void {
     <div class="form-row">
       <div class="form-field">
         <label>Engine version</label>
-        <select id="np-engine">${options}</select>
+        <select id="np-engine">${engines.map((e) => engineOption(e)).join("")}</select>
       </div>
       <div class="form-field">
         <label>Renderer</label>
@@ -105,28 +111,27 @@ export function showNewProjectModal(): void {
     <button class="btn btn-primary" id="np-create">Create &amp; Edit</button>`,
   );
 
-  overlay.querySelector("[data-close-btn]")!.addEventListener("click", closeModal);
-  overlay.querySelector("#np-browse")!.addEventListener("click", async () => {
-    const folderInput = overlay.querySelector("#np-folder") as HTMLInputElement;
+  q(overlay, "#np-browse").addEventListener("click", async () => {
+    const folderInput = q<HTMLInputElement>(overlay, "#np-folder");
     const picked = await pickFolder("Choose project location", folderInput.value);
     if (picked) folderInput.value = picked;
   });
-  overlay.querySelector("#np-create")!.addEventListener("click", async () => {
-    const name = (overlay.querySelector("#np-name") as HTMLInputElement).value.trim();
-    const folder = (overlay.querySelector("#np-folder") as HTMLInputElement).value.trim();
-    const [version, variant] = (overlay.querySelector("#np-engine") as HTMLSelectElement).value.split("|");
-    const renderer = (overlay.querySelector("#np-renderer") as HTMLSelectElement).value as Renderer;
+  q(overlay, "#np-create").addEventListener("click", async () => {
+    const name = q<HTMLInputElement>(overlay, "#np-name").value.trim();
+    const folder = q<HTMLInputElement>(overlay, "#np-folder").value.trim();
+    const [version, variant] = q<HTMLSelectElement>(overlay, "#np-engine").value.split("|");
+    const renderer = q<HTMLSelectElement>(overlay, "#np-renderer").value as Renderer;
     if (!name) {
-      (overlay.querySelector("#np-name") as HTMLInputElement).focus();
+      q<HTMLInputElement>(overlay, "#np-name").focus();
       return;
     }
-    const btn = overlay.querySelector("#np-create") as HTMLButtonElement;
+    const btn = q<HTMLButtonElement>(overlay, "#np-create");
     btn.disabled = true;
     const ok = await createProject(name, folder, version, variant as Variant, renderer);
     btn.disabled = false;
     if (ok) closeModal();
   });
-  (overlay.querySelector("#np-name") as HTMLInputElement).focus();
+  q<HTMLInputElement>(overlay, "#np-name").focus();
 }
 
 // ---------- Add External Engine ----------
@@ -150,7 +155,7 @@ function showManualEngineModal(path: string): void {
     `
     <p style="margin: 0 0 14px; color: var(--text-dim); font-size: 13.5px;">
       The version could not be detected automatically. Enter it for:<br/>
-      <code style="font-size:12px;">${path}</code>
+      <code style="font-size:12px;">${esc(path)}</code>
     </p>
     <div class="form-row">
       <div class="form-field">
@@ -170,18 +175,17 @@ function showManualEngineModal(path: string): void {
     <button class="btn btn-primary" id="me-add">Add Engine</button>`,
   );
 
-  overlay.querySelector("[data-close-btn]")!.addEventListener("click", closeModal);
-  overlay.querySelector("#me-add")!.addEventListener("click", async () => {
-    const version = (overlay.querySelector("#me-version") as HTMLInputElement).value.trim();
-    const variant = (overlay.querySelector("#me-variant") as HTMLSelectElement).value as Variant;
+  q(overlay, "#me-add").addEventListener("click", async () => {
+    const version = q<HTMLInputElement>(overlay, "#me-version").value.trim();
+    const variant = q<HTMLSelectElement>(overlay, "#me-variant").value as Variant;
     if (!version) {
-      (overlay.querySelector("#me-version") as HTMLInputElement).focus();
+      q<HTMLInputElement>(overlay, "#me-version").focus();
       return;
     }
     const outcome = await addExternalEngine(path, version, variant);
     if (outcome === "ok") closeModal();
   });
-  (overlay.querySelector("#me-version") as HTMLInputElement).focus();
+  q<HTMLInputElement>(overlay, "#me-version").focus();
 }
 
 // ---------- First-run setup ----------
@@ -214,9 +218,9 @@ export function showFirstRunModal(): void {
     <button class="btn btn-primary" id="fr-save" disabled>Save</button>`,
   );
 
-  const enginesInput = overlay.querySelector("#fr-engines") as HTMLInputElement;
-  const projectsInput = overlay.querySelector("#fr-projects") as HTMLInputElement;
-  const saveBtn = overlay.querySelector("#fr-save") as HTMLButtonElement;
+  const enginesInput = q<HTMLInputElement>(overlay, "#fr-engines");
+  const projectsInput = q<HTMLInputElement>(overlay, "#fr-projects");
+  const saveBtn = q<HTMLButtonElement>(overlay, "#fr-save");
   enginesInput.value = state.settings.enginesDir;
   projectsInput.value = state.settings.projectsDir;
 
@@ -225,18 +229,17 @@ export function showFirstRunModal(): void {
   };
   refreshSave();
 
-  overlay.querySelector("#fr-browse-engines")!.addEventListener("click", async () => {
+  q(overlay, "#fr-browse-engines").addEventListener("click", async () => {
     const picked = await pickFolder("Choose engine install directory");
     if (picked) enginesInput.value = picked;
     refreshSave();
   });
-  overlay.querySelector("#fr-browse-projects")!.addEventListener("click", async () => {
+  q(overlay, "#fr-browse-projects").addEventListener("click", async () => {
     const picked = await pickFolder("Choose projects directory");
     if (picked) projectsInput.value = picked;
     refreshSave();
   });
 
-  overlay.querySelector("[data-close-btn]")!.addEventListener("click", closeModal);
   saveBtn.addEventListener("click", async () => {
     const updated: Settings = {
       ...state.settings,
@@ -253,30 +256,23 @@ export function showFirstRunModal(): void {
 
 export function showChangeEngineModal(project: Project): void {
   const current = `${project.engineVersion}|${project.variant}`;
-  const installed = state.engines.filter((e) => e.status === "installed");
-  const notInstalled = state.engines.filter(
-    (e) => e.status !== "installed" && e.downloadUrl,
-  );
-
-  const option = (e: (typeof state.engines)[number]) =>
-    `<option value="${e.version}|${e.variant}" ${`${e.version}|${e.variant}` === current ? "selected" : ""}>
-       Godot ${e.version} — ${variantLabel(e.variant)}${e.channel !== "stable" ? ` (${e.channel})` : ""}
-     </option>`;
+  const installed = installedEngines();
+  const notInstalled = state.engines.filter((e) => e.status !== "installed" && e.downloadUrl);
 
   const overlay = openModal(
     "Change Engine Version",
     `
     <p style="margin: 0 0 14px; color: var(--text-dim); font-size: 13.5px;">
-      "${project.name}" currently opens with
-      <strong>Godot ${project.engineVersion} — ${variantLabel(project.variant)}</strong>.
+      "${esc(project.name)}" currently opens with
+      <strong>Godot ${esc(project.engineVersion)} — ${variantLabel(project.variant)}</strong>.
     </p>
     <div class="form-field">
       <label>New engine version</label>
       <select id="ce-engine">
-        <optgroup label="Installed">${installed.map(option).join("")}</optgroup>
+        <optgroup label="Installed">${installed.map((e) => engineOption(e, current)).join("")}</optgroup>
         ${
           notInstalled.length
-            ? `<optgroup label="Not installed — will be downloaded">${notInstalled.map(option).join("")}</optgroup>`
+            ? `<optgroup label="Not installed — will be downloaded">${notInstalled.map((e) => engineOption(e, current)).join("")}</optgroup>`
             : ""
         }
       </select>
@@ -287,9 +283,8 @@ export function showChangeEngineModal(project: Project): void {
     <button class="btn btn-primary" id="ce-change">Change</button>`,
   );
 
-  overlay.querySelector("[data-close-btn]")!.addEventListener("click", closeModal);
-  overlay.querySelector("#ce-change")!.addEventListener("click", () => {
-    const value = (overlay.querySelector("#ce-engine") as HTMLSelectElement).value;
+  q(overlay, "#ce-change").addEventListener("click", () => {
+    const value = q<HTMLSelectElement>(overlay, "#ce-engine").value;
     if (value === current) {
       closeModal();
       return;
@@ -313,20 +308,19 @@ export function showChangeEngineModal(project: Project): void {
 
 export function showConfirmModal(
   title: string,
-  message: string,
+  message: string, // plain text — escaped here
   confirmLabel: string,
   onConfirm: () => void,
   confirmClass: "btn-danger" | "btn-primary" = "btn-danger",
 ): void {
   const overlay = openModal(
     title,
-    `<p style="margin:0; color: var(--text-dim);">${message}</p>`,
+    `<p style="margin:0; color: var(--text-dim);">${esc(message)}</p>`,
     `
     <button class="btn" data-close-btn>Cancel</button>
-    <button class="btn ${confirmClass}" id="cf-confirm">${confirmLabel}</button>`,
+    <button class="btn ${confirmClass}" id="cf-confirm">${esc(confirmLabel)}</button>`,
   );
-  overlay.querySelector("[data-close-btn]")!.addEventListener("click", closeModal);
-  overlay.querySelector("#cf-confirm")!.addEventListener("click", () => {
+  q(overlay, "#cf-confirm").addEventListener("click", () => {
     closeModal();
     onConfirm();
   });

@@ -36,6 +36,31 @@ pub struct Project {
     pub last_opened: Option<i64>, // epoch millis
 }
 
+impl EngineInfo {
+    /// An engine that exists on disk (managed install dir or external executable).
+    pub fn installed(
+        id: String,
+        version: String,
+        variant: String,
+        source: &str,
+        size_mb: f64,
+        path: String,
+    ) -> Self {
+        Self {
+            channel: channel_of(&version).into(),
+            status: "installed".into(),
+            source: source.into(),
+            size_mb,
+            release_date: String::new(),
+            path: Some(path),
+            download_url: None,
+            id,
+            version,
+            variant,
+        }
+    }
+}
+
 pub fn engine_id(version: &str, variant: &str) -> String {
     format!("{version}-{variant}")
 }
