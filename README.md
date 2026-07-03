@@ -1,7 +1,7 @@
 # Godot Launchpad
 
 A standalone, lightweight desktop launcher for [Godot Engine](https://godotengine.org/).
-Built with [Tauri 2](https://tauri.app/) (Rust + native webview), around 12 MB. Not Electron.
+Built with [Tauri 2](https://tauri.app/) (Rust + native webview), around 12 MB.
 
 ## Features
 
@@ -10,7 +10,6 @@ Built with [Tauri 2](https://tauri.app/) (Rust + native webview), around 12 MB. 
 - Projects in your projects folder show up automatically
 - Each project opens with the right engine. Missing one? Install it with one click
 - .NET projects are detected and tagged
-- Create new projects that look exactly like ones made by Godot itself
 - See disk usage per engine version and in total
 
 ## Download
@@ -47,15 +46,6 @@ Output lands in `src-tauri/target/release/` (and `bundle/` for installers).
 - `src/` frontend: Vite + vanilla TypeScript, no framework
 - `src-tauri/src/` backend: engines, projects, settings
 - Views talk to the backend only through `src/state.ts`
-
-## Releasing
-
-Push a version tag and CI builds installers for all platforms into a draft release:
-
-```sh
-git tag v0.2.0
-git push origin v0.2.0
-```
 
 ## License
 
