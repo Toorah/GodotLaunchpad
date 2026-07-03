@@ -26,3 +26,4 @@ dist-ssr
 # AI assistant files — never commit
 .claude/
 CLAUDE.md
+TASKS.md
